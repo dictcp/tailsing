@@ -3,7 +3,7 @@
 
 package com.tailscale.ipn.ui.view
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -32,7 +33,6 @@ import androidx.compose.ui.unit.dp
 import com.tailscale.ipn.BuildConfig
 import com.tailscale.ipn.R
 import com.tailscale.ipn.ui.Links
-import com.tailscale.ipn.ui.theme.logoBackground
 import com.tailscale.ipn.ui.util.AppVersion
 
 @Composable
@@ -51,14 +51,10 @@ fun AboutView(backToSettings: BackNavigation) {
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState()),
     ) {
-      TailscaleLogoView(
-          usesOnBackgroundColors = true,
-          modifier =
-              Modifier.width(100.dp)
-                  .height(100.dp)
-                  .clip(RoundedCornerShape(50))
-                  .background(MaterialTheme.colorScheme.logoBackground)
-                  .padding(25.dp),
+      Image(
+          painter = painterResource(R.drawable.ic_launcher_foreground),
+          contentDescription = null,
+          modifier = Modifier.width(100.dp).height(100.dp).clip(RoundedCornerShape(20.dp)),
       )
 
       Column(

@@ -30,11 +30,11 @@
     <string name="cancel">Cancel</string>
 
     <!-- Strings for the about screen -->
-    <string name="app_name" translatable="false">Tailscale + sing-box (test)</string>
-    <string name="tile_name" translatable="false">Tailscale</string>
+    <string name="app_name" translatable="false">tailsing</string>
+    <string name="tile_name" translatable="false">tailsing</string>
     <string name="version">Version</string>
-    <string name="about_view_header">About Tailscale</string>
-    <string name="about_view_title">Tailscale for Android</string>
+    <string name="about_view_header">About tailsing</string>
+    <string name="about_view_title">tailsing for Android</string>
     <string name="acknowledgements">Acknowledgements</string>
     <string name="privacy_policy">Privacy Policy</string>
     <string name="terms_of_service">Terms of Service</string>
@@ -52,7 +52,7 @@
     <string name="settings_title">Settings</string>
     <string name="settings_admin_prefix">"Manage your tailnet settings in the "</string>
     <string name="settings_admin_link">admin console</string>
-    <string name="about_tailscale">About Tailscale</string>
+    <string name="about_tailscale">About tailsing</string>
     <string name="bug_report">Bug report</string>
     <string name="use_ts_dns">Use Tailscale DNS</string>
     <string name="routing_config">Routing configuration</string>
@@ -82,7 +82,7 @@
     <string name="starting">Starting…</string>
     <string name="connect_to_tailnet_prefix">"Connect again to talk to the other devices in the "</string>
     <string name="connect_to_tailnet_suffix">" tailnet."</string>
-    <string name="welcome_to_tailscale">Welcome to Tailscale</string>
+    <string name="welcome_to_tailscale">Welcome to tailsing</string>
     <string name="login_to_join_your_tailnet">Log in to join your tailnet and connect your devices.</string>
     <string name="give_permissions">Set up a VPN connection so you can start using Tailscale.</string>
     <string name="keyExpiryExplainer">Reauthenticate to remain connected to Tailscale.</string>
