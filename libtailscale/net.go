@@ -4,6 +4,7 @@
 package libtailscale
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -77,10 +78,17 @@ var googleDNSServers = []netip.Addr{
 }
 
 func (b *backend) updateTUN(rcfg *router.Config, dcfg *dns.OSConfig) (err error) {
+	originalCfg, originalDNS := rcfg, dcfg
 	b.logger.Logf("updateTUN: changed")
 	defer b.logger.Logf("updateTUN: finished")
 
 	if disableTUN := len(rcfg.LocalAddrs) == 0; disableTUN {
+		if b.routingEnabled.Load() {
+			b.dispatcher.SetRoutes(nil)
+			b.routing.Suspend("Tailscale identity unavailable")
+			b.lastCfg, b.lastDNSCfg = originalCfg, originalDNS
+			return nil
+		}
 		b.logger.Logf("updateTUN: closing old TUNs")
 		b.CloseTUNs()
 		b.logger.Logf("updateTUN: closed old TUNs")
@@ -99,6 +107,36 @@ func (b *backend) updateTUN(rcfg *router.Config, dcfg *dns.OSConfig) (err error)
 			b.logger.Logf("updateTUN: tunnel brought down: %v", err)
 		}
 		return nil
+	}
+	b.dispatcher.SetRoutes(rcfg.Routes)
+	if b.routingEnabled.Load() {
+		if err := b.routing.Resume(); err != nil {
+			b.logger.Logf("routing resume failed; Internet remains blocked")
+		}
+		copyCfg := *rcfg
+		rcfg = &copyCfg
+		rcfg.Routes = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}
+		var local []string
+		if err := json.Unmarshal([]byte(b.appCtx.GetLocalNetworkPrefixesJSON()), &local); err != nil {
+			return fmt.Errorf("local Wi-Fi prefixes: %w", err)
+		}
+		rcfg.LocalRoutes = append([]netip.Prefix(nil), rcfg.LocalRoutes...)
+		for _, entry := range local {
+			p, err := netip.ParsePrefix(entry)
+			if err != nil {
+				return fmt.Errorf("local Wi-Fi prefix: %w", err)
+			}
+			rcfg.LocalRoutes = append(rcfg.LocalRoutes, p.Masked())
+		}
+		// Both route groups use included-minus-excluded prefixes below; this
+		// gives local Wi-Fi priority even over more specific tailnet routes.
+		if dcfg == nil {
+			dcfg = &dns.OSConfig{}
+		} else {
+			copyDNS := *dcfg
+			dcfg = &copyDNS
+		}
+		dcfg.Nameservers = []netip.Addr{netip.MustParseAddr("100.100.100.100")}
 	}
 
 	builder := vpnService.service.NewBuilder()
@@ -129,7 +167,7 @@ func (b *backend) updateTUN(rcfg *router.Config, dcfg *dns.OSConfig) (err error)
 	// Decide whether to use ExcludeRoute (API 33+) or compute included prefixes
 	// and pass them to AddRoute (older APIs).
 	useExclude := false
-	if sdk, err := b.appCtx.GetSDKInt(); err == nil && sdk >= 33 {
+	if sdk, err := b.appCtx.GetSDKInt(); err == nil && sdk >= 33 && !b.routingEnabled.Load() {
 		useExclude = true
 	}
 
@@ -234,15 +272,15 @@ func (b *backend) updateTUN(rcfg *router.Config, dcfg *dns.OSConfig) (err error)
 	}
 	b.logger.Logf("updateTUN: created TUN device")
 
-	b.devices.add(tunDev)
+	b.devices.add(b.dispatcher.Wrap(tunDev))
 	b.logger.Logf("updateTUN: added TUN device")
 
 	if b.devices.Up() {
 		b.logger.Logf("tunnel brought up")
 	}
 
-	b.lastCfg = rcfg
-	b.lastDNSCfg = dcfg
+	b.lastCfg = originalCfg
+	b.lastDNSCfg = originalDNS
 	return nil
 }
 
@@ -264,6 +302,7 @@ func (b *backend) CloseTUNs() {
 
 // ifname is the interface name retrieved from LinkProperties on network change. If a network is lost, an empty string is passed in.
 func (b *backend) NetworkChanged(ifname string) {
+	b.physicalInterface.Store(&ifname)
 	defer func() {
 		if p := recover(); p != nil {
 			log.Printf("panic in NetworkChanged %s: %s", p, debug.Stack())
@@ -277,6 +316,9 @@ func (b *backend) NetworkChanged(ifname string) {
 		b.netMon.InjectEvent()
 	} else {
 		log.Printf("NetworkChanged: netMon is nil")
+	}
+	if b.routing != nil {
+		b.routing.NetworkChanged()
 	}
 }
 

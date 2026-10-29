@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/tailscale/tailscale-android/libtailscale/routing"
 	"tailscale.com/drive/driveimpl"
 	_ "tailscale.com/feature/condregister"
 	"tailscale.com/feature/taildrop"
@@ -58,6 +59,9 @@ type App struct {
 	backend         *ipnlocal.LocalBackend
 	ready           sync.WaitGroup
 	backendMu       sync.Mutex
+	routingBackend  *backend
+	routingChanges  chan chan error
+	routingMu       sync.Mutex
 
 	// logger is the logtail logger whose uploads follow the user's
 	// IsClientLoggingEnabled preference. Populated once runBackend wires
@@ -93,14 +97,17 @@ func start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppCon
 }
 
 type backend struct {
-	engine     wgengine.Engine
-	backend    *ipnlocal.LocalBackend
-	sys        *tsd.System
-	devices    *multiTUN
-	settings   settingsFunc
-	lastCfg    *router.Config
-	lastDNSCfg *dns.OSConfig
-	netMon     *netmon.Monitor
+	engine            wgengine.Engine
+	backend           *ipnlocal.LocalBackend
+	sys               *tsd.System
+	devices           *multiTUN
+	settings          settingsFunc
+	lastCfg           *router.Config
+	lastDNSCfg        *dns.OSConfig
+	netMon            *netmon.Monitor
+	nativeNetstack    *netstack.Impl
+	physicalInterface atomic.Pointer[string]
+	activeService     atomic.Pointer[IPNService]
 
 	logIDPublic logid.PublicID
 	logger      *logtail.Logger
@@ -111,7 +118,10 @@ type backend struct {
 	// when no nameservers are provided by Tailscale.
 	avoidEmptyDNS bool
 
-	appCtx AppContext
+	appCtx         AppContext
+	routing        *routing.Manager
+	dispatcher     *routing.Dispatcher
+	routingEnabled atomic.Bool
 }
 
 type settingsFunc func(*router.Config, *dns.OSConfig) error
@@ -148,6 +158,14 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 	a.logIDPublicAtomic.Store(&b.logIDPublic)
 	a.logger.Store(b.logger)
 	a.backend = b.backend
+	a.routingBackend = b
+	if config, err := a.appCtx.DecryptFromPref("singbox-active-config"); err == nil && config != "" {
+		b.routingEnabled.Store(true)
+		b.dispatcher.SetEnabled(true)
+		if err := b.routing.Apply(config); err != nil {
+			log.Printf("routing restore failed; captured Internet traffic remains blocked")
+		}
+	}
 	if hardwareAttestation {
 		a.backend.SetHardwareAttested()
 	}
@@ -189,6 +207,12 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 	})
 	for {
 		select {
+		case reply := <-a.routingChanges:
+			if vpnService.service != nil && cfg.rcfg != nil && state >= ipn.Starting {
+				reply <- b.updateTUN(cfg.rcfg, cfg.dcfg)
+			} else {
+				reply <- nil
+			}
 		case s := <-stateCh:
 			state = s
 			if state >= ipn.Starting && vpnService.service != nil && b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
@@ -244,6 +268,8 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 			b.backend.DebugRebind()
 
 			vpnService.service = s
+			b.activeService.Store(&s)
+			b.routing.NetworkChanged()
 
 			if state >= ipn.Starting && b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
 				if err := b.updateTUN(cfg.rcfg, cfg.dcfg); err != nil {
@@ -252,6 +278,10 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 			}
 		case s := <-onDisconnect:
 			if vpnService.service != nil && vpnService.service.ID() == s.ID() {
+				b.activeService.Store(nil)
+				if b.routingEnabled.Load() {
+					b.routing.CaptureLost()
+				}
 				if b.devices.Down() {
 					log.Printf("tunnel brought down on disconnect")
 				}
@@ -259,6 +289,7 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 				netns.SetAndroidProtectFunc(nil)
 				netns.SetAndroidBindToNetworkFunc(nil)
 				vpnService.service = nil
+				b.activeService.Store(nil)
 			}
 		case i := <-onDNSConfigChanged:
 			// TODO (barnstar): Consider using [dns.Manager.RecompileDNSConfig] here.
@@ -267,6 +298,11 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 			// that independently of userspace engine network changes which may
 			// eliminate some unnecessary work.
 			go b.NetworkChanged(i)
+			if b.routingEnabled.Load() && vpnService.service != nil && cfg.rcfg != nil && state >= ipn.Starting {
+				if err := b.updateTUN(cfg.rcfg, cfg.dcfg); err != nil {
+					log.Printf("routing VPN refresh failed; retaining existing capture")
+				}
+			}
 		}
 	}
 }
@@ -300,6 +336,8 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		appCtx:   appCtx,
 		bus:      sys.Bus.Get(),
 	}
+	b.dispatcher = routing.NewDispatcher()
+	b.routing = routing.NewManager(&routingHost{b: b}, b.dispatcher)
 
 	var logID logid.PrivateID
 	logID.UnmarshalText([]byte("dead0000dead0000dead0000dead0000dead0000dead0000dead0000dead0000"))
@@ -354,8 +392,10 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		return nil, fmt.Errorf("netstack.Create: %w", err)
 	}
 	sys.Set(ns)
-	ns.ProcessLocalIPs = false // let Android kernel handle it; VpnBuilder sets this up
-	ns.ProcessSubnets = true   // for Android-being-an-exit-node support
+	b.nativeNetstack = ns
+	ns.ProcessLocalIPs = false             // let Android kernel handle it; VpnBuilder sets this up
+	ns.ProcessSubnets = true               // for Android-being-an-exit-node support
+	ns.CheckLocalTransportEndpoints = true // retain kernel listeners while accepting replies to native outbound dials
 	sys.NetstackRouter.Set(true)
 	if w, ok := sys.Tun.GetOK(); ok {
 		w.Start()
@@ -409,6 +449,11 @@ func (b *backend) isConfigNonNilAndDifferent(rcfg *router.Config, dcfg *dns.OSCo
 
 func (a *App) closeVpnService(err error, b *backend) {
 	log.Printf("VPN update failed: %v", err)
+	if b.routingEnabled.Load() {
+		b.dispatcher.SetRoutes(nil)
+		b.routing.Suspend("VPN capture could not be refreshed")
+		return
+	}
 
 	mp := new(ipn.MaskedPrefs)
 	mp.WantRunning = false

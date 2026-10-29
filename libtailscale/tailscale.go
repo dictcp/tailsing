@@ -37,6 +37,7 @@ func newApp(dataDir, directFileRoot string, hardwareAttestationPref bool, appCtx
 		directFileRoot: directFileRoot,
 		dataDir:        dataDir,
 		appCtx:         appCtx,
+		routingChanges: make(chan chan error),
 	}
 	a.ready.Add(2)
 

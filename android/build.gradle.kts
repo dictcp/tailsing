@@ -18,10 +18,12 @@ kotlin { compilerOptions { jvmTarget = JvmTarget.JVM_17 } }
 android {
   val androidApiLevel = providers.gradleProperty("androidApiLevel").get().toInt()
 
-  ndkVersion = "23.1.7779620"
+  ndkVersion = "27.2.12479018"
   compileSdk = androidApiLevel
 
   defaultConfig {
+    applicationId = "com.tailscale.ipn.singbox"
+    ndk { abiFilters += "arm64-v8a" }
     minSdk = 26
     targetSdk = androidApiLevel
 

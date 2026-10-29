@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: BSD-3-Clause
 package com.tailscale.ipn
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.tailscale.ipn.util.TSLog
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -70,7 +75,23 @@ object NetworkChangeCallback {
   // monitorDnsChanges sets up a network callback to monitor changes to the
   // system's network state and update the DNS configuration when interfaces
   // become available or properties of those interfaces change.
-  fun monitorDnsChanges(connectivityManager: ConnectivityManager, dns: DnsConfig) {
+  fun monitorDnsChanges(
+      context: Context,
+      connectivityManager: ConnectivityManager,
+      dns: DnsConfig,
+  ) {
+    // Data Saver can change without a transport or DNS change. This receiver
+    // and the connectivity callback live for the lifetime of the application.
+    ContextCompat.registerReceiver(
+        context.applicationContext,
+        object : BroadcastReceiver() {
+          override fun onReceive(context: Context, intent: Intent) {
+            lock.withLock { maybeUpdateDNSConfig("Data Saver changed", dns) }
+          }
+        },
+        IntentFilter(ConnectivityManager.ACTION_RESTRICT_BACKGROUND_CHANGED),
+        ContextCompat.RECEIVER_NOT_EXPORTED,
+    )
     val networkConnectivityRequest =
         NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -110,9 +131,8 @@ object NetworkChangeCallback {
             lock.withLock {
               activeNetworks[network]?.caps = capabilities
 
-              if (recomputeDefaultNetworkLocked("onCapabilitiesChanged")) {
-                maybeUpdateDNSConfig("onCapabilitiesChanged", dns)
-              }
+              recomputeDefaultNetworkLocked("onCapabilitiesChanged")
+              maybeUpdateDNSConfig("onCapabilitiesChanged", dns)
             }
           }
 
@@ -139,6 +159,20 @@ object NetworkChangeCallback {
           }
         },
     )
+  }
+
+  internal fun routingNetworkMetadata(
+      restrictBackgroundStatus: Int
+  ): Map<String, RoutingNetworkMetadata> = lock.withLock {
+    activeNetworks.values
+        .mapNotNull { info ->
+          val name = info.linkProps.interfaceName ?: return@mapNotNull null
+          if (!info.caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) {
+            return@mapNotNull null
+          }
+          name to routingMetadataForNetwork(info.caps, restrictBackgroundStatus)
+        }
+        .toMap()
   }
 
   // pickDefaultNetwork returns a non-VPN network to use as the 'default'
@@ -202,12 +236,14 @@ object NetworkChangeCallback {
     val defaultNetwork = cachedDefaultNetwork
     if (defaultNetwork == null) {
       TSLog.d(TAG, "$why: no default network available; not updating DNS")
+      Libtailscale.onDNSConfigChanged("")
       return
     }
 
     val info = cachedDefaultNetworkInfo
     if (info == null) {
       Log.w(TAG, "$why: no info for default network; not updating DNS")
+      Libtailscale.onDNSConfigChanged("")
       return
     }
 
@@ -232,7 +268,9 @@ object NetworkChangeCallback {
               .firstNotNullOfOrNull { it.gateway?.hostAddress } ?: ""
 
       Libtailscale.onGatewayChanged(gatewayIP)
-      Libtailscale.onDNSConfigChanged(info.linkProps.interfaceName)
     }
+    // Interface capabilities and addresses affect routing even when the DNS
+    // text is unchanged (for example metered Wi-Fi or a cellular handover).
+    Libtailscale.onDNSConfigChanged(info.linkProps.interfaceName ?: "")
   }
 }

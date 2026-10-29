@@ -51,9 +51,55 @@ tailscale.jks
 
 libtailscale.aar
 libtailscale-sources.jar
+android/libs/*.aar
 .DS_Store
 
 tailscale.version
 
 # local tmp folder
 .tmp/
+
+# Local integration builds, device evidence, and caches.
+.build/
+artifacts/
+*.log
+/evidence/
+__pycache__/
+*.py[cod]
+
+# Local-only development scripts, profiles, and investigation records.
+/DEVICE-TESTS.md
+/INTEGRATION.md
+/OPERATIONS.md
+/PLAN.md
+/README.original.md
+/ROUTING-CONDITIONS.md
+/VALIDATION.md
+/profiles/condition-domain-keyword.json
+/profiles/condition-domain-regex.json
+/profiles/condition-domain-suffix.json
+/profiles/condition-invert.json
+/profiles/condition-ip-cidr.json
+/profiles/condition-ip-version.json
+/profiles/condition-logical-and.json
+/profiles/condition-network-type.json
+/profiles/condition-network.json
+/profiles/condition-package-exact.json
+/profiles/condition-package-regex.json
+/profiles/condition-port-nonmatch.json
+/profiles/condition-port.json
+/profiles/condition-uid.json
+/profiles/regression-app-exit.json
+/profiles/regression-app-nonmatching.json
+/profiles/regression-blocked.json
+/profiles/regression-domain-exit.json
+/profiles/regression-exit.json
+/profiles/regression-socks.json
+/scripts/build-baseline.sh
+/scripts/build-client.sh
+/scripts/check-apk-16k.sh
+/scripts/device-condition-tests.py
+/scripts/device-expanded-tests.py
+/scripts/device-fix-verification.py
+/scripts/test-host.sh
+/test-harness/

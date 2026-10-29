@@ -30,7 +30,7 @@
     <string name="cancel">Cancel</string>
 
     <!-- Strings for the about screen -->
-    <string name="app_name" translatable="false">Tailscale</string>
+    <string name="app_name" translatable="false">Tailscale + sing-box (test)</string>
     <string name="tile_name" translatable="false">Tailscale</string>
     <string name="version">Version</string>
     <string name="about_view_header">About Tailscale</string>
@@ -55,6 +55,22 @@
     <string name="about_tailscale">About Tailscale</string>
     <string name="bug_report">Bug report</string>
     <string name="use_ts_dns">Use Tailscale DNS</string>
+    <string name="routing_config">Routing configuration</string>
+    <string name="routing_config_subtitle">Edit and apply sing-box JSON</string>
+    <string name="routing_config_title">Routing configuration</string>
+    <string name="routing_config_description">Edit a sing-box JSON profile. Validate it before applying. Drafts stay on this device.</string>
+    <string name="routing_config_json_label">sing-box JSON</string>
+    <string name="routing_config_validate">Validate</string>
+    <string name="routing_config_apply">Apply</string>
+    <string name="routing_config_disable">Disable routing</string>
+    <string name="routing_config_valid">Configuration is valid. Apply it to activate.</string>
+    <string name="routing_config_applied">Configuration applied.</string>
+    <string name="routing_config_operation_failed">The routing operation failed.</string>
+    <string name="routing_config_status">Routing status: %s</string>
+    <string name="routing_config_disabled">Routing is disabled.</string>
+    <string name="routing_config_saved_draft">Draft saved on this device.</string>
+    <string name="routing_config_disable_confirm_title">Disable sing-box routing?</string>
+    <string name="routing_config_disable_confirm_message">Traffic will return to the normal Tailscale routing behavior.</string>
     <string name="internal_debug_options">Internal debug options</string>
 
     <!-- Strings for the main screen -->

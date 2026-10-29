@@ -14,6 +14,7 @@ import android.content.RestrictionsManager
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -43,6 +44,8 @@ import com.tailscale.ipn.util.ShareFileHelper
 import com.tailscale.ipn.util.TSLog
 import java.io.IOException
 import java.lang.UnsupportedOperationException
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.security.GeneralSecurityException
 import java.util.Collections
@@ -186,7 +189,7 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
     healthNotifier = HealthNotifier(Notifier.health, Notifier.state, applicationScope)
     favoritesManager = FavoritesManager(Notifier.state, Notifier.netmap, applicationScope)
     connectivityManager = this.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-    NetworkChangeCallback.monitorDnsChanges(connectivityManager, dns)
+    NetworkChangeCallback.monitorDnsChanges(this, connectivityManager, dns)
     initViewModels()
     applicationScope.launch {
       val restrictionsManager =
@@ -357,6 +360,90 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
 
   override fun getSDKInt(): Long = Build.VERSION.SDK_INT.toLong()
 
+  @Serializable private data class ConnectionOwnerJSON(val uid: Int, val packages: List<String>)
+
+  override fun findConnectionOwnerJSON(
+      protocol: Int,
+      sourceAddr: String,
+      sourcePort: Int,
+      destinationAddr: String,
+      destinationPort: Int,
+  ): String {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+      throw UnsupportedOperationException("Connection ownership requires Android 10 or later")
+    }
+    if (sourcePort !in 0..65535 || destinationPort !in 0..65535) {
+      throw IllegalArgumentException("Invalid connection port")
+    }
+
+    // The caller passes packet addresses, not hostnames. Reject non-numeric
+    // values so this callback never performs DNS lookups on the routing path.
+    fun parsePacketAddress(value: String): InetAddress {
+      if (value.isEmpty() || !value.matches(Regex("[0-9a-fA-F:.]+"))) {
+        throw IllegalArgumentException("Invalid packet address")
+      }
+      return try {
+        InetAddress.getByName(value)
+      } catch (_: Exception) {
+        throw IllegalArgumentException("Invalid packet address")
+      }
+    }
+
+    val local = InetSocketAddress(parsePacketAddress(sourceAddr), sourcePort)
+    val remote = InetSocketAddress(parsePacketAddress(destinationAddr), destinationPort)
+    val uid =
+        try {
+          connectivityManager.getConnectionOwnerUid(protocol, local, remote)
+        } catch (error: Exception) {
+          throw IllegalStateException(
+              "Unable to determine the application for this connection",
+              error,
+          )
+        }
+    if (uid < 0) {
+      // App routing must fail closed when the platform cannot identify a UID.
+      throw IllegalStateException("Android did not identify an application for this connection")
+    }
+    val packages = packageManager.getPackagesForUid(uid)?.filter { it.isNotBlank() }.orEmpty()
+    if (packages.isEmpty()) {
+      throw IllegalStateException("Android returned no package for the connection owner")
+    }
+    return interfaceJson.encodeToString(ConnectionOwnerJSON(uid, packages))
+  }
+
+  override fun getLocalNetworkPrefixesJSON(): String {
+    // The user's local Wi-Fi route takes precedence over accepted Tailscale
+    // subnet routes. Cellular networks do not contribute local bypass ranges.
+    // Direct sockets bind to the cached physical default network. Do not
+    // classify a secondary Wi-Fi network as reachable through a cellular
+    // default; supporting that case needs an explicit per-network socket bind.
+    val selectedNetwork =
+        NetworkChangeCallback.cachedDefaultNetwork?.takeIf { network ->
+          val capabilities = connectivityManager.getNetworkCapabilities(network)
+          capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+              capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+        }
+    val prefixes =
+        selectedNetwork
+            ?.let { connectivityManager.getLinkProperties(it)?.linkAddresses }
+            .orEmpty()
+            .mapNotNull { linkAddress ->
+              val address = linkAddress.address ?: return@mapNotNull null
+              if (
+                  address.isAnyLocalAddress ||
+                      address.isLoopbackAddress ||
+                      address.isMulticastAddress
+              ) {
+                return@mapNotNull null
+              }
+              val host = address.hostAddress?.substringBefore('%') ?: return@mapNotNull null
+              "$host/${linkAddress.prefixLength}"
+            }
+            .distinct()
+            .sorted()
+    return interfaceJson.encodeToString(prefixes)
+  }
+
   override fun isChromeOS(): Boolean {
     return packageManager.hasSystemFeature("android.hardware.type.pc")
   }
@@ -382,11 +469,20 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
       val pointToPoint: Boolean,
       val multicast: Boolean,
       val addrs: List<AddrJson>,
+      val type: String = "other",
+      val expensive: Boolean = false,
+      val constrained: Boolean = false,
   )
 
   override fun getInterfacesAsJson(): String {
     val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
     val out = ArrayList<InterfaceJson>(interfaces.size)
+    val networkMetadata =
+        if (::connectivityManager.isInitialized) {
+          NetworkChangeCallback.routingNetworkMetadata(connectivityManager.restrictBackgroundStatus)
+        } else {
+          emptyMap()
+        }
 
     for (nif in interfaces) {
       try {
@@ -398,6 +494,7 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
           addrs.add(AddrJson(ip = host, prefixLen = ia.networkPrefixLength.toInt()))
         }
 
+        val metadata = networkMetadata[nif.name] ?: RoutingNetworkMetadata()
         out.add(
             InterfaceJson(
                 name = nif.name,
@@ -409,6 +506,9 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
                 pointToPoint = nif.isPointToPoint,
                 multicast = nif.supportsMulticast(),
                 addrs = addrs,
+                type = metadata.type,
+                expensive = metadata.expensive,
+                constrained = metadata.constrained,
             )
         )
       } catch (_: Exception) {

@@ -99,6 +99,13 @@ fun SettingsView(
 
       Lists.ItemDivider()
       Setting.Text(
+          R.string.routing_config,
+          subtitle = stringResource(R.string.routing_config_subtitle),
+          onClick = settingsNav.onNavigateToRoutingConfig,
+      )
+
+      Lists.ItemDivider()
+      Setting.Text(
           R.string.split_tunneling,
           subtitle = stringResource(R.string.filter_apps_allowed_to_access_tailscale),
           onClick = settingsNav.onNavigateToSplitTunneling,
@@ -298,5 +305,5 @@ fun SettingsPreview() {
   vm.tailNetLockEnabled.set(true)
   vm.isAdmin.set(true)
   vm.managedByOrganization.set("Tails and Scales Inc.")
-  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
+  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
 }

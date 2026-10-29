@@ -55,6 +55,16 @@ type tunDevice struct {
 	closeDone chan error
 	// readDone is notified when the read goroutine is done.
 	readDone chan struct{}
+	stopOnce sync.Once
+}
+
+func (d *tunDevice) stop() {
+	d.stopOnce.Do(func() {
+		// Mark retirement before closing the FD so readFrom suppresses the
+		// expected close error. Close independently of the blocked writer.
+		close(d.close)
+		d.dev.Close()
+	})
 }
 
 type readRequest struct {
@@ -140,7 +150,7 @@ func (d *multiTUN) run() {
 		case <-d.shutdowns:
 			// Shut down all devices.
 			for _, dev := range devices {
-				close(dev.close)
+				dev.stop()
 				<-dev.closeDone
 				<-dev.readDone
 			}
@@ -149,6 +159,7 @@ func (d *multiTUN) run() {
 		case <-d.close:
 			var derr error
 			for _, dev := range devices {
+				dev.stop()
 				if err := <-dev.closeDone; err != nil {
 					derr = err
 				}
@@ -159,7 +170,7 @@ func (d *multiTUN) run() {
 			if len(devices) > 0 {
 				// Ask the most recent device to stop.
 				prev := devices[len(devices)-1]
-				close(prev.close)
+				prev.stop()
 			}
 			wrap := &tunDevice{
 				dev:       dev,
@@ -254,8 +265,17 @@ func (d *multiTUN) runDevice(dev *tunDevice) {
 		}()
 		for {
 			select {
-			case e := <-dev.dev.Events():
-				d.events <- e
+			case e, ok := <-dev.dev.Events():
+				if !ok {
+					return
+				}
+				select {
+				case d.events <- e:
+				case <-dev.close:
+					return
+				case <-d.close:
+					return
+				}
 			case <-dev.close:
 				return
 			}

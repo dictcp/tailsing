@@ -86,6 +86,9 @@ type AppContext interface {
 	// GetUserCACertsPEM returns PEM-encoded user-installed CA certificates
 	// from the Android KeyStore, or empty bytes if none are installed.
 	GetUserCACertsPEM() ([]byte, error)
+
+	FindConnectionOwnerJSON(protocol int32, sourceAddress string, sourcePort int32, destinationAddress string, destinationPort int32) (string, error)
+	GetLocalNetworkPrefixesJSON() string
 }
 
 // IPNService corresponds to our IPNService in Java.
@@ -129,6 +132,11 @@ type ParcelFileDescriptor interface {
 // Application encapsulates the running Tailscale Application. There is only a
 // single instance of Application per Android application.
 type Application interface {
+	RoutingConfig() (string, error)
+	RoutingStatus() string
+	ValidateRoutingConfig(config string) error
+	ApplyRoutingConfig(config string) error
+	DisableRouting() error
 	// CallLocalAPI provides a mechanism for calling Tailscale's HTTP localapi
 	// without having to call over the network.
 	CallLocalAPI(timeoutMillis int, method, endpoint string, body InputStream) (LocalAPIResponse, error)
